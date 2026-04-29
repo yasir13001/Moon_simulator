@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Query
 import httpx
+import os
 
 router = APIRouter(prefix="/api/esp", tags=["esp"])
 
 # Must match ESP8266 WiFi AP IP from your integration doc.
-ESP_BASE_URL = "http://192.168.4.1"
+ESP_BASE_URL = os.environ.get("ESP_BASE_URL", "http://192.168.4.1")
 
 
 @router.get("/move")

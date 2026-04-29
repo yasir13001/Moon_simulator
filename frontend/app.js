@@ -177,7 +177,23 @@ let simSpeed = Number.parseFloat(speedEl.value);
 let isPlaying = true;
 let isScrubbingTimeline = false;
 let lastFrameMs = performance.now();
-let lastFetchMs = 0;
+let lastFetchRealMs = 0;
+let lastFetchSimTimeMs = null;
+let isFetchingSky = false;
+let forceSkyFetchQueued = false;
+
+// Interpolation between snapshots: we keep two time-stamped positions and blend.
+let moonSnap0Vec = null;
+let moonSnap1Vec = null;
+let sunSnap0Vec = null;
+let sunSnap1Vec = null;
+let moonSnap0Light = 0;
+let moonSnap1Light = 0;
+let moonSnap0TimeMs = 0;
+let moonSnap1TimeMs = 0;
+
+const FETCH_EVERY_SIM_MS = 2000; // throttle by simulated time
+const FETCH_MAX_REAL_MS = 2500; // safety cap for status freshness
 
 applyBtn.addEventListener("click", () => {
   const lat = Number.parseFloat(latEl.value);
@@ -279,15 +295,21 @@ function animate(now = performance.now()) {
   }
   updateTimeControls();
 
-  if (now - lastFetchMs > 1200) {
-    fetchSky(false);
-    lastFetchMs = now;
+  // Fetch smarter: only when simulated time advanced enough.
+  if (!isFetchingSky && isPlaying) {
+    const simDelta = lastFetchSimTimeMs === null ? Infinity : simTimeMs - lastFetchSimTimeMs;
+    const realDelta = now - lastFetchRealMs;
+    if (simDelta >= FETCH_EVERY_SIM_MS || realDelta >= FETCH_MAX_REAL_MS) {
+      fetchSky(false);
+    }
   }
 
   controls.update();
   if (followSelectedEl.value === "on" && selectedObject) {
     controls.target.lerp(selectedObject.position, 0.08);
   }
+
+  applyInterpolatedSky();
 
   // Auto track: send Moon az/alt to the ESP periodically.
   const trackEverySeconds = Number.parseInt(espTrackEl.value, 10);
@@ -316,8 +338,18 @@ function animate(now = performance.now()) {
 }
 
 async function fetchSky(force) {
+  if (isFetchingSky) {
+    if (force) {
+      forceSkyFetchQueued = true;
+    }
+    return;
+  }
+  isFetchingSky = true;
+
+  const requestSimTimeMs = simTimeMs;
+
   try {
-    const timeIso = new Date(simTimeMs).toISOString();
+    const timeIso = new Date(requestSimTimeMs).toISOString();
     const url = new URL(`${API_BASE}/api/sky`);
     url.searchParams.set("lat", String(location.lat));
     url.searchParams.set("lon", String(location.lon));
@@ -329,7 +361,9 @@ async function fetchSky(force) {
     }
     const sky = await response.json();
     latestSkyData = sky;
-    applySkySnapshot(sky);
+    applySkySnapshot(sky, requestSimTimeMs);
+    lastFetchRealMs = performance.now();
+    lastFetchSimTimeMs = requestSimTimeMs;
 
     const moon = sky.celestial_objects.find((o) => o.type === "moon")?.data;
     const sun = sky.celestial_objects.find((o) => o.type === "sun")?.data;
@@ -348,6 +382,12 @@ async function fetchSky(force) {
   } catch (error) {
     if (force) {
       setStatus(`Unable to fetch /api/sky: ${error.message}`);
+    }
+  } finally {
+    isFetchingSky = false;
+    if (forceSkyFetchQueued) {
+      forceSkyFetchQueued = false;
+      fetchSky(true);
     }
   }
 }
@@ -497,7 +537,7 @@ function flyTargetTo(targetPos, desiredDistance) {
   requestAnimationFrame(step);
 }
 
-function applySkySnapshot(sky) {
+function applySkySnapshot(sky, requestSimTimeMs) {
   const moon = sky.celestial_objects.find((o) => o.type === "moon")?.data;
   const sun = sky.celestial_objects.find((o) => o.type === "sun")?.data;
   if (!moon || !sun) return;
@@ -507,13 +547,49 @@ function applySkySnapshot(sky) {
   const sunAlt = sun.position.horizontal.altitude_deg;
   const sunAz = sun.position.horizontal.azimuth_deg;
 
-  moonMesh.position.copy(horizontalToCartesian(moonAlt, moonAz, SKY_RADIUS - 8));
-  sunMesh.position.copy(horizontalToCartesian(sunAlt, sunAz, SKY_RADIUS - 12));
-
   const moonLight = moon.phase.illumination_fraction;
-  moonMesh.material.color.setRGB(0.2 + moonLight, 0.2 + moonLight, 0.22 + moonLight);
+  const moonVec = horizontalToCartesian(moonAlt, moonAz, SKY_RADIUS - 8);
+  const sunVec = horizontalToCartesian(sunAlt, sunAz, SKY_RADIUS - 12);
+
+  // Initialize on first snapshot.
+  if (moonSnap1Vec === null) {
+    moonSnap0Vec = moonVec.clone();
+    moonSnap1Vec = moonVec.clone();
+    sunSnap0Vec = sunVec.clone();
+    sunSnap1Vec = sunVec.clone();
+    moonSnap0Light = moonLight;
+    moonSnap1Light = moonLight;
+    moonSnap0TimeMs = requestSimTimeMs;
+    moonSnap1TimeMs = requestSimTimeMs;
+    applyInterpolatedSky();
+    return;
+  }
+
+  // Shift current "next" snapshot to "prev" and set the new "next".
+  moonSnap0Vec = moonSnap1Vec;
+  moonSnap0Light = moonSnap1Light;
+  moonSnap0TimeMs = moonSnap1TimeMs;
+  sunSnap0Vec = sunSnap1Vec;
+
+  moonSnap1Vec = moonVec;
+  moonSnap1Light = moonLight;
+  moonSnap1TimeMs = requestSimTimeMs;
+  sunSnap1Vec = sunVec;
+}
+
+function applyInterpolatedSky() {
+  if (!moonSnap0Vec || !moonSnap1Vec || !sunSnap0Vec || !sunSnap1Vec) return;
+  const denom = moonSnap1TimeMs - moonSnap0TimeMs;
+  const alpha = denom === 0 ? 1 : (simTimeMs - moonSnap0TimeMs) / denom;
+  const t = Math.max(0, Math.min(1, alpha));
+
+  moonMesh.position.copy(moonSnap0Vec).lerp(moonSnap1Vec, t);
+  sunMesh.position.copy(sunSnap0Vec).lerp(sunSnap1Vec, t);
+
+  const light = moonSnap0Light + (moonSnap1Light - moonSnap0Light) * t;
+  moonMesh.material.color.setRGB(0.2 + light, 0.2 + light, 0.22 + light);
   sunLight.position.copy(sunMesh.position).normalize();
-  sunLight.intensity = Math.max(0.2, Math.min(1.5, moonLight + 0.3));
+  sunLight.intensity = Math.max(0.2, Math.min(1.5, light + 0.3));
 }
 
 function horizontalToCartesian(altDeg, azDeg, radius) {
