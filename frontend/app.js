@@ -9,6 +9,7 @@ const metadataContentEl = document.getElementById("metadataContent");
 const latEl = document.getElementById("lat");
 const lonEl = document.getElementById("lon");
 const speedEl = document.getElementById("speed");
+const followSelectedEl = document.getElementById("followSelected");
 const applyBtn = document.getElementById("apply");
 
 const scene = new THREE.Scene();
@@ -30,6 +31,8 @@ const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 const pickableObjects = [];
 let latestSkyData = null;
+let hoveredObject = null;
+let selectedObject = null;
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
@@ -82,6 +85,11 @@ grid.position.y = -7.95;
 grid.material.transparent = true;
 grid.material.opacity = 0.25;
 scene.add(grid);
+
+addCardinalMarker("N", 0);
+addCardinalMarker("E", 90);
+addCardinalMarker("S", 180);
+addCardinalMarker("W", 270);
 
 const earthRef = new THREE.Mesh(
   new THREE.SphereGeometry(5, 32, 32),
@@ -168,6 +176,7 @@ window.addEventListener("resize", () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 renderer.domElement.addEventListener("click", onCanvasClick);
+renderer.domElement.addEventListener("mousemove", onCanvasHover);
 
 setStatus("Initializing viewer...");
 fetchSky(true);
@@ -184,6 +193,9 @@ function animate(now = performance.now()) {
   }
 
   controls.update();
+  if (followSelectedEl.value === "on" && selectedObject) {
+    controls.target.lerp(selectedObject.position, 0.08);
+  }
   earthRef.rotation.y += deltaSeconds * 0.08;
   earthCloudBand.rotation.y += deltaSeconds * 0.1;
   renderer.render(scene, camera);
@@ -274,6 +286,7 @@ function onCanvasClick(event) {
   if (hits.length === 0) return;
 
   const hit = hits[0].object;
+  selectedObject = hit;
   if (hit === moonMesh) {
     renderMetadata("Moon", latestSkyData?.celestial_objects?.find((o) => o.type === "moon")?.data ?? {});
     return;
@@ -358,6 +371,81 @@ function renderMetadata(title, data) {
 
     metadataContentEl.appendChild(sectionEl);
   });
+}
+
+function onCanvasHover(event) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+
+  const hits = raycaster.intersectObjects(pickableObjects, false);
+  const hit = hits.length > 0 ? hits[0].object : null;
+
+  if (hoveredObject === hit) return;
+  clearHoverState();
+  hoveredObject = hit;
+
+  if (!hoveredObject) return;
+  hoveredObject.userData.baseScale = hoveredObject.scale.clone();
+  hoveredObject.scale.multiplyScalar(1.2);
+
+  const material = hoveredObject.material;
+  if (material && "emissive" in material) {
+    hoveredObject.userData.baseEmissive = material.emissive.getHex();
+    material.emissive.setHex(0x335577);
+  } else if (material && "color" in material) {
+    hoveredObject.userData.baseColor = material.color.getHex();
+    material.color.offsetHSL(0, 0, 0.15);
+  }
+}
+
+function clearHoverState() {
+  if (!hoveredObject) return;
+  const material = hoveredObject.material;
+
+  if (hoveredObject.userData.baseScale) {
+    hoveredObject.scale.copy(hoveredObject.userData.baseScale);
+  }
+  if (material && "emissive" in material && hoveredObject.userData.baseEmissive !== undefined) {
+    material.emissive.setHex(hoveredObject.userData.baseEmissive);
+  }
+  if (material && "color" in material && hoveredObject.userData.baseColor !== undefined) {
+    material.color.setHex(hoveredObject.userData.baseColor);
+  }
+  hoveredObject = null;
+}
+
+function addCardinalMarker(label, azDeg) {
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: createTextTexture(label),
+      transparent: true,
+      depthTest: false,
+    }),
+  );
+  sprite.position.copy(horizontalToCartesian(0, azDeg, SKY_RADIUS - 10));
+  sprite.position.y = -7.2;
+  sprite.scale.set(4.4, 2.2, 1);
+  scene.add(sprite);
+}
+
+function createTextTexture(text) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "rgba(6, 18, 36, 0.65)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = "rgba(120, 190, 255, 0.85)";
+  ctx.lineWidth = 4;
+  ctx.strokeRect(4, 4, canvas.width - 8, canvas.height - 8);
+  ctx.fillStyle = "#e8f5ff";
+  ctx.font = "bold 78px Arial";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+  return new THREE.CanvasTexture(canvas);
 }
 
 function flattenData(data, prefix = "", out = {}) {
