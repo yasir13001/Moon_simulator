@@ -16,6 +16,14 @@ const timelineEl = document.getElementById("timeline");
 const timelineLabelEl = document.getElementById("timelineLabel");
 const followSelectedEl = document.getElementById("followSelected");
 const applyBtn = document.getElementById("apply");
+const objectSearchEl = document.getElementById("objectSearch");
+const searchBtnEl = document.getElementById("searchBtn");
+const espTrackEl = document.getElementById("espTrack");
+const espAzEl = document.getElementById("espAz");
+const espAltEl = document.getElementById("espAlt");
+const espSendBtnEl = document.getElementById("espSendBtn");
+const espStatusEl = document.getElementById("espStatus");
+const espBaselineBtnEl = document.getElementById("espBaselineBtn");
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000006);
@@ -38,6 +46,12 @@ const pickableObjects = [];
 let latestSkyData = null;
 let hoveredObject = null;
 let selectedObject = null;
+let isFlying = false;
+let latestMoonAzDeg = null;
+let latestMoonAltDeg = null;
+let espLastSentMs = 0;
+let lastMoonSentAzDeg = null;
+let lastMoonSentAltDeg = null;
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
@@ -126,6 +140,7 @@ for (let i = 0; i < 500; i += 1) {
     new THREE.MeshBasicMaterial({ color: 0xffffff }),
   );
   star.position.copy(p);
+  star.userData.name = `Star ${i + 1}`;
   stars.add(star);
   pickableObjects.push(star);
 }
@@ -140,6 +155,7 @@ const moonMesh = new THREE.Mesh(
   }),
 );
 scene.add(moonMesh);
+moonMesh.userData.name = "Moon";
 pickableObjects.push(moonMesh);
 
 const sunMesh = new THREE.Mesh(
@@ -147,8 +163,10 @@ const sunMesh = new THREE.Mesh(
   new THREE.MeshBasicMaterial({ color: 0xffd463 }),
 );
 scene.add(sunMesh);
+sunMesh.userData.name = "Sun";
 pickableObjects.push(sunMesh);
 pickableObjects.push(earthRef);
+earthRef.userData.name = "Earth";
 
 let location = {
   lat: Number.parseFloat(latEl.value),
@@ -175,6 +193,18 @@ applyBtn.addEventListener("click", () => {
 
 speedEl.addEventListener("change", () => {
   simSpeed = Number.parseFloat(speedEl.value);
+});
+
+espSendBtnEl.addEventListener("click", () => {
+  if (latestMoonAzDeg === null || latestMoonAltDeg === null) return;
+  sendRelativeToESP(latestMoonAzDeg, latestMoonAltDeg, true);
+});
+
+espBaselineBtnEl.addEventListener("click", () => {
+  if (latestMoonAzDeg === null || latestMoonAltDeg === null) return;
+  lastMoonSentAzDeg = latestMoonAzDeg;
+  lastMoonSentAltDeg = latestMoonAltDeg;
+  espStatusEl.textContent = `ESP baseline set (next update will move).`;
 });
 playPauseEl.addEventListener("click", () => {
   isPlaying = !isPlaying;
@@ -222,6 +252,20 @@ window.addEventListener("resize", () => {
 renderer.domElement.addEventListener("click", onCanvasClick);
 renderer.domElement.addEventListener("mousemove", onCanvasHover);
 
+searchBtnEl.addEventListener("click", () => {
+  const query = (objectSearchEl.value ?? "").trim();
+  if (!query) return;
+  onSearch(query);
+});
+objectSearchEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    const query = (objectSearchEl.value ?? "").trim();
+    if (!query) return;
+    onSearch(query);
+  }
+});
+
 setStatus("Initializing viewer...");
 updateTimeControls();
 fetchSky(true);
@@ -244,6 +288,27 @@ function animate(now = performance.now()) {
   if (followSelectedEl.value === "on" && selectedObject) {
     controls.target.lerp(selectedObject.position, 0.08);
   }
+
+  // Auto track: send Moon az/alt to the ESP periodically.
+  const trackEverySeconds = Number.parseInt(espTrackEl.value, 10);
+  const shouldTrack = Number.isFinite(trackEverySeconds) && trackEverySeconds > 0;
+  if (
+    shouldTrack &&
+    latestMoonAzDeg !== null &&
+    latestMoonAltDeg !== null &&
+    now - espLastSentMs > trackEverySeconds * 1000
+  ) {
+    espLastSentMs = now;
+    // If baseline not set, set it and wait for next tick (prevents big initial jump).
+    if (lastMoonSentAzDeg === null || lastMoonSentAltDeg === null) {
+      lastMoonSentAzDeg = latestMoonAzDeg;
+      lastMoonSentAltDeg = latestMoonAltDeg;
+      espStatusEl.textContent = `ESP baseline set (next update will move).`;
+    } else {
+      sendRelativeToESP(latestMoonAzDeg, latestMoonAltDeg, false);
+    }
+  }
+
   earthRef.rotation.y += deltaSeconds * 0.08;
   earthCloudBand.rotation.y += deltaSeconds * 0.1;
   renderer.render(scene, camera);
@@ -269,8 +334,14 @@ async function fetchSky(force) {
     const moon = sky.celestial_objects.find((o) => o.type === "moon")?.data;
     const sun = sky.celestial_objects.find((o) => o.type === "sun")?.data;
     const moonAlt = moon?.position?.horizontal?.altitude_deg ?? 0;
+    const moonAz = moon?.position?.horizontal?.azimuth_deg ?? 0;
     const illum = moon?.phase?.illumination_fraction ?? 0;
     const sunAlt = sun?.position?.horizontal?.altitude_deg ?? 0;
+
+    latestMoonAltDeg = moonAlt;
+    latestMoonAzDeg = moonAz;
+    espAzEl.value = String(moonAz.toFixed(2));
+    espAltEl.value = String(moonAlt.toFixed(2));
     setStatus(
       `${new Date(simTimeMs).toLocaleString()} | Moon alt ${moonAlt.toFixed(1)}° | Illum ${(illum * 100).toFixed(1)}% | Sun alt ${sunAlt.toFixed(1)}°`,
     );
@@ -279,6 +350,151 @@ async function fetchSky(force) {
       setStatus(`Unable to fetch /api/sky: ${error.message}`);
     }
   }
+}
+
+function normalizeAzDeltaDeg(daz) {
+  // Map to [-180, 180] to avoid wrap jumps around 0/360.
+  let d = daz;
+  while (d > 180) d -= 360;
+  while (d < -180) d += 360;
+  return d;
+}
+
+async function sendRelativeToESP(azDeg, altDeg, showBaselineHint) {
+  try {
+    if (lastMoonSentAzDeg === null || lastMoonSentAltDeg === null) {
+      // Baseline should be set via the "baseline" button or auto-track first tick.
+      if (showBaselineHint) {
+        espStatusEl.textContent = `Set tracking baseline first (then send).`;
+      }
+      return;
+    }
+
+    const daz = normalizeAzDeltaDeg(azDeg - lastMoonSentAzDeg);
+    const dalt = altDeg - lastMoonSentAltDeg;
+
+    // Clamp deltas for safety (relative move).
+    const dazClamped = Math.max(-180.0, Math.min(180.0, daz));
+    const daltClamped = Math.max(-90.0, Math.min(90.0, dalt));
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1800);
+    const url = new URL(`${API_BASE}/api/esp/move`);
+    url.searchParams.set("az", String(dazClamped));
+    url.searchParams.set("alt", String(daltClamped));
+    url.searchParams.set("relative", "true");
+    const response = await fetch(url, {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    const data = await response.json();
+    if (data.ok) {
+      espStatusEl.textContent = `ESP: ${data.response} (daz=${data.sent.az.toFixed(
+        1,
+      )} dalt=${data.sent.alt.toFixed(1)})`;
+      // Advance baseline for the next delta move.
+      lastMoonSentAzDeg = azDeg;
+      lastMoonSentAltDeg = altDeg;
+    } else {
+      espStatusEl.textContent = `ESP error: ${data.error ?? "Unknown error"}`;
+    }
+  } catch (e) {
+    espStatusEl.textContent = `ESP request failed: ${e.message ?? String(e)}`;
+  }
+}
+
+function onSearch(query) {
+  const q = query.toLowerCase();
+
+  // Prefer real objects first.
+  const directMap = {
+    moon: moonMesh,
+    sun: sunMesh,
+    earth: earthRef,
+  };
+  if (directMap[q]) {
+    selectAndFly(directMap[q]);
+    return;
+  }
+
+  // Otherwise do a best-effort name match across pickable objects.
+  const obj = pickableObjects.find((o) => {
+    const name = (o.userData?.name ?? "").toLowerCase();
+    return name && name.includes(q);
+  });
+  if (!obj) {
+    setStatus(`No object found for "${query}".`);
+    return;
+  }
+  selectAndFly(obj);
+}
+
+function selectAndFly(obj) {
+  selectedObject = obj;
+  followSelectedEl.value = "on";
+
+  if (obj === moonMesh) {
+    const moon = latestSkyData?.celestial_objects?.find((o) => o.type === "moon")?.data ?? {};
+    renderMetadata("Moon", moon);
+  } else if (obj === sunMesh) {
+    const sun = latestSkyData?.celestial_objects?.find((o) => o.type === "sun")?.data ?? {};
+    renderMetadata("Sun", sun);
+  } else if (obj === earthRef) {
+    renderMetadata("Earth Reference", {
+      description: "Viewer reference object for horizon and orientation.",
+      location,
+      simulated_time: new Date(simTimeMs).toISOString(),
+    });
+  } else {
+    renderMetadata(obj.userData?.name ?? "Object", {
+      type: "synthetic",
+      position: {
+        x: Number(obj.position.x.toFixed(3)),
+        y: Number(obj.position.y.toFixed(3)),
+        z: Number(obj.position.z.toFixed(3)),
+      },
+    });
+  }
+
+  flyTargetTo(obj.position.clone(), obj === earthRef ? 15 : 25);
+}
+
+function flyTargetTo(targetPos, desiredDistance) {
+  if (isFlying) return;
+  isFlying = true;
+
+  const startTarget = controls.target.clone();
+  const endTarget = targetPos.clone();
+
+  const startCameraPos = camera.position.clone();
+  const toStart = startCameraPos.clone().sub(startTarget);
+  const dir = toStart.lengthSq() > 1e-6 ? toStart.normalize() : new THREE.Vector3(0, 0, 1);
+
+  const endCameraPos = endTarget.clone().add(dir.multiplyScalar(desiredDistance));
+
+  const startMs = performance.now();
+  const durationMs = 900;
+
+  function step() {
+    const t = Math.min(1, (performance.now() - startMs) / durationMs);
+    const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; // easeInOutQuad
+
+    controls.target.lerpVectors(startTarget, endTarget, eased);
+    camera.position.lerpVectors(startCameraPos, endCameraPos, eased);
+    camera.lookAt(controls.target);
+    controls.update();
+
+    if (t < 1) {
+      requestAnimationFrame(step);
+    } else {
+      isFlying = false;
+    }
+  }
+
+  requestAnimationFrame(step);
 }
 
 function applySkySnapshot(sky) {
