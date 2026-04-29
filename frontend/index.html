@@ -47,6 +47,12 @@
         color: #8fe3ff;
         min-height: 18px;
       }
+      #timelineLabel {
+        font-size: 12px;
+        color: #b8c7d8;
+        margin-top: -4px;
+        margin-bottom: 8px;
+      }
       #metadata {
         position: fixed;
         top: 12px;
@@ -116,11 +122,19 @@
 
       <label for="speed">Simulation Speed</label>
       <select id="speed">
-        <option value="0">Pause</option>
         <option value="1" selected>Real-time (1x)</option>
         <option value="10">Fast (10x)</option>
         <option value="100">Very fast (100x)</option>
       </select>
+      <button id="playPause">Pause</button>
+      <button id="jumpNow">Jump To Now</button>
+
+      <label for="timeInput">Set Time (local)</label>
+      <input id="timeInput" type="datetime-local" />
+
+      <label for="timeline">Timeline (-24h to +24h from now)</label>
+      <input id="timeline" type="range" min="-1440" max="1440" step="1" value="0" />
+      <div id="timelineLabel">Now</div>
 
       <button id="apply">Apply Location</button>
       <label for="followSelected">Camera</label>

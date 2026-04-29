@@ -9,6 +9,11 @@ const metadataContentEl = document.getElementById("metadataContent");
 const latEl = document.getElementById("lat");
 const lonEl = document.getElementById("lon");
 const speedEl = document.getElementById("speed");
+const playPauseEl = document.getElementById("playPause");
+const jumpNowEl = document.getElementById("jumpNow");
+const timeInputEl = document.getElementById("timeInput");
+const timelineEl = document.getElementById("timeline");
+const timelineLabelEl = document.getElementById("timelineLabel");
 const followSelectedEl = document.getElementById("followSelected");
 const applyBtn = document.getElementById("apply");
 
@@ -151,6 +156,8 @@ let location = {
 };
 let simTimeMs = Date.now();
 let simSpeed = Number.parseFloat(speedEl.value);
+let isPlaying = true;
+let isScrubbingTimeline = false;
 let lastFrameMs = performance.now();
 let lastFetchMs = 0;
 
@@ -169,6 +176,43 @@ applyBtn.addEventListener("click", () => {
 speedEl.addEventListener("change", () => {
   simSpeed = Number.parseFloat(speedEl.value);
 });
+playPauseEl.addEventListener("click", () => {
+  isPlaying = !isPlaying;
+  playPauseEl.textContent = isPlaying ? "Pause" : "Play";
+  if (!isPlaying) {
+    setStatus("Simulation paused.");
+  }
+});
+jumpNowEl.addEventListener("click", () => {
+  simTimeMs = Date.now();
+  updateTimeControls();
+  fetchSky(true);
+});
+timeInputEl.addEventListener("change", () => {
+  const selected = new Date(timeInputEl.value);
+  if (Number.isNaN(selected.getTime())) {
+    return;
+  }
+  simTimeMs = selected.getTime();
+  isPlaying = false;
+  playPauseEl.textContent = "Play";
+  updateTimeControls();
+  fetchSky(true);
+});
+timelineEl.addEventListener("pointerdown", () => {
+  isScrubbingTimeline = true;
+});
+timelineEl.addEventListener("pointerup", () => {
+  isScrubbingTimeline = false;
+});
+timelineEl.addEventListener("input", () => {
+  const offsetMinutes = Number.parseInt(timelineEl.value, 10);
+  simTimeMs = Date.now() + offsetMinutes * 60 * 1000;
+  isPlaying = false;
+  playPauseEl.textContent = "Play";
+  updateTimeControls();
+  fetchSky(true);
+});
 
 window.addEventListener("resize", () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -179,13 +223,17 @@ renderer.domElement.addEventListener("click", onCanvasClick);
 renderer.domElement.addEventListener("mousemove", onCanvasHover);
 
 setStatus("Initializing viewer...");
+updateTimeControls();
 fetchSky(true);
 animate();
 
 function animate(now = performance.now()) {
   const deltaSeconds = (now - lastFrameMs) / 1000;
   lastFrameMs = now;
-  simTimeMs += deltaSeconds * simSpeed * 1000;
+  if (isPlaying) {
+    simTimeMs += deltaSeconds * simSpeed * 1000;
+  }
+  updateTimeControls();
 
   if (now - lastFetchMs > 1200) {
     fetchSky(false);
@@ -274,6 +322,25 @@ function randomPointOnSphere(radius) {
 
 function setStatus(message) {
   statusEl.textContent = message;
+}
+
+function updateTimeControls() {
+  if (!isScrubbingTimeline) {
+    const offsetMinutes = Math.round((simTimeMs - Date.now()) / (60 * 1000));
+    const clamped = Math.max(-1440, Math.min(1440, offsetMinutes));
+    timelineEl.value = String(clamped);
+    timelineLabelEl.textContent =
+      clamped === 0
+        ? "Now"
+        : `${clamped > 0 ? "+" : ""}${clamped} min from now`;
+  }
+  timeInputEl.value = toDatetimeLocal(simTimeMs);
+}
+
+function toDatetimeLocal(ms) {
+  const d = new Date(ms);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function onCanvasClick(event) {
