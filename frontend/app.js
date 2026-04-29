@@ -28,6 +28,7 @@ const espBaselineBtnEl = document.getElementById("espBaselineBtn");
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x000006);
 
+
 const camera = new THREE.PerspectiveCamera(
   65,
   window.innerWidth / window.innerHeight,
@@ -597,7 +598,7 @@ function horizontalToCartesian(altDeg, azDeg, radius) {
   const az = THREE.MathUtils.degToRad(azDeg);
   const x = radius * Math.cos(alt) * Math.sin(az);
   const y = radius * Math.sin(alt);
-  const z = radius * Math.cos(alt) * Math.cos(az);
+  const z = -radius * Math.cos(alt) * Math.cos(az); // <-- flipped
   return new THREE.Vector3(x, y, z);
 }
 
