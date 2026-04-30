@@ -305,12 +305,19 @@ function animate(now = performance.now()) {
     }
   }
 
-  controls.update();
-  if (followSelectedEl.value === "on" && selectedObject) {
-    controls.target.lerp(selectedObject.position, 0.08);
-  }
-
+  // Apply interpolated positions FIRST so selectedObject.position is current this frame.
   applyInterpolatedSky();
+
+  // Follow mode: disable OrbitControls damping while following so its internal
+  // lerp doesn't fight our target update every frame (that's what causes jitter).
+  // Hard-copy the target directly — the object moves slowly enough that it's smooth.
+  if (followSelectedEl.value === "on" && selectedObject && !isFlying) {
+    controls.enableDamping = false;
+    controls.target.copy(selectedObject.position);
+  } else {
+    controls.enableDamping = true;
+  }
+  controls.update();
 
   // Auto track: send Moon az/alt to the ESP periodically.
   const trackEverySeconds = Number.parseInt(espTrackEl.value, 10);
@@ -362,7 +369,7 @@ async function fetchSky(force) {
     }
     const sky = await response.json();
     latestSkyData = sky;
-    applySkySnapshot(sky, requestSimTimeMs);
+    applySkySnapshot(sky, requestSimTimeMs, force);
     lastFetchRealMs = performance.now();
     lastFetchSimTimeMs = requestSimTimeMs;
 
@@ -504,7 +511,12 @@ function selectAndFly(obj) {
 }
 
 function flyTargetTo(targetPos, desiredDistance) {
-  if (isFlying) return;
+  // Interrupt any in-progress fly so new requests are never silently dropped.
+  isFlying = false;
+  requestAnimationFrame(() => _startFly(targetPos, desiredDistance));
+}
+
+function _startFly(targetPos, desiredDistance) {
   isFlying = true;
 
   const startTarget = controls.target.clone();
@@ -538,7 +550,7 @@ function flyTargetTo(targetPos, desiredDistance) {
   requestAnimationFrame(step);
 }
 
-function applySkySnapshot(sky, requestSimTimeMs) {
+function applySkySnapshot(sky, requestSimTimeMs, force = false) {
   const moon = sky.celestial_objects.find((o) => o.type === "moon")?.data;
   const sun = sky.celestial_objects.find((o) => o.type === "sun")?.data;
   if (!moon || !sun) return;
@@ -552,8 +564,9 @@ function applySkySnapshot(sky, requestSimTimeMs) {
   const moonVec = horizontalToCartesian(moonAlt, moonAz, SKY_RADIUS - 8);
   const sunVec = horizontalToCartesian(sunAlt, sunAz, SKY_RADIUS - 12);
 
-  // Initialize on first snapshot.
-  if (moonSnap1Vec === null) {
+  // Initialize on first snapshot, or collapse window on forced fetch (scrub/jump)
+  // so we don't lerp across a stale time range.
+  if (moonSnap1Vec === null || force) {
     moonSnap0Vec = moonVec.clone();
     moonSnap1Vec = moonVec.clone();
     sunSnap0Vec = sunVec.clone();
