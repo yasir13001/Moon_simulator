@@ -620,6 +620,35 @@ function applyInterpolatedSky() {
     star.material.transparent = true;
     star.visible = starOpacity > 0.01;
   });
+
+  // Sky colour gradient keyed to sun altitude:
+  //  below -18° : deep night   #000006
+  //  -18° → -6° : twilight     #000006 → #1a0a2e (deep purple)
+  //   -6° →  0° : civil dawn   #1a0a2e → #c0471a (orange-red horizon)
+  //    0° →  8° : sunrise      #c0471a → #e8a030 (warm amber)
+  //    8° → 20° : morning      #e8a030 → #4a90d9 (sky blue)
+  //   above 20° : full day     #4a90d9 → #1a6ecf (deep blue)
+  const skyStops = [
+    { alt: -18, color: new THREE.Color(0x000006) },
+    { alt:  -6, color: new THREE.Color(0x1a0a2e) },
+    { alt:   0, color: new THREE.Color(0xc0471a) },
+    { alt:   8, color: new THREE.Color(0xe8a030) },
+    { alt:  20, color: new THREE.Color(0x4a90d9) },
+    { alt:  90, color: new THREE.Color(0x1a6ecf) },
+  ];
+  let skyColor = skyStops[0].color.clone();
+  for (let i = 0; i < skyStops.length - 1; i++) {
+    const lo = skyStops[i];
+    const hi = skyStops[i + 1];
+    if (sunAltDeg >= lo.alt && sunAltDeg <= hi.alt) {
+      const f = (sunAltDeg - lo.alt) / (hi.alt - lo.alt);
+      skyColor = lo.color.clone().lerp(hi.color, f);
+      break;
+    }
+    if (sunAltDeg > hi.alt) skyColor = hi.color.clone();
+  }
+  scene.background = skyColor;
+  skyMat.color.copy(skyColor);
 }
 
 function horizontalToCartesian(altDeg, azDeg, radius) {
