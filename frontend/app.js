@@ -192,6 +192,8 @@ let moonSnap0Light = 0;
 let moonSnap1Light = 0;
 let moonSnap0TimeMs = 0;
 let moonSnap1TimeMs = 0;
+let sunSnap0AltDeg = 0;
+let sunSnap1AltDeg = 0;
 
 const FETCH_EVERY_SIM_MS = 2000; // throttle by simulated time
 const FETCH_MAX_REAL_MS = 2500; // safety cap for status freshness
@@ -575,6 +577,8 @@ function applySkySnapshot(sky, requestSimTimeMs, force = false) {
     moonSnap1Light = moonLight;
     moonSnap0TimeMs = requestSimTimeMs;
     moonSnap1TimeMs = requestSimTimeMs;
+    sunSnap0AltDeg = sunAlt;
+    sunSnap1AltDeg = sunAlt;
     applyInterpolatedSky();
     return;
   }
@@ -584,11 +588,13 @@ function applySkySnapshot(sky, requestSimTimeMs, force = false) {
   moonSnap0Light = moonSnap1Light;
   moonSnap0TimeMs = moonSnap1TimeMs;
   sunSnap0Vec = sunSnap1Vec;
+  sunSnap0AltDeg = sunSnap1AltDeg;
 
   moonSnap1Vec = moonVec;
   moonSnap1Light = moonLight;
   moonSnap1TimeMs = requestSimTimeMs;
   sunSnap1Vec = sunVec;
+  sunSnap1AltDeg = sunAlt;
 }
 
 function applyInterpolatedSky() {
@@ -604,6 +610,16 @@ function applyInterpolatedSky() {
   moonMesh.material.color.setRGB(0.2 + light, 0.2 + light, 0.22 + light);
   sunLight.position.copy(sunMesh.position).normalize();
   sunLight.intensity = Math.max(0.2, Math.min(1.5, light + 0.3));
+
+  // Fade stars based on sun altitude.
+  // Fully visible below -6° (astronomical twilight), fully hidden above +6°.
+  const sunAltDeg = sunSnap0AltDeg + (sunSnap1AltDeg - sunSnap0AltDeg) * t;
+  const starOpacity = Math.max(0, Math.min(1, (-sunAltDeg - 6) / 12 + 1));
+  stars.children.forEach((star) => {
+    star.material.opacity = starOpacity;
+    star.material.transparent = true;
+    star.visible = starOpacity > 0.01;
+  });
 }
 
 function horizontalToCartesian(altDeg, azDeg, radius) {
