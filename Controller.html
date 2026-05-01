@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Moon Tracker Control</title>
+  <style>
+    body {
+      background: #0b1a2a;
+      color: white;
+      font-family: Arial;
+      text-align: center;
+    }
+    .display {
+      font-size: 28px;
+      margin: 20px;
+    }
+    .controls button {
+      font-size: 20px;
+      margin: 5px;
+      padding: 10px 15px;
+    }
+    .step button {
+      margin: 5px;
+      padding: 5px 10px;
+    }
+    input {
+      padding: 5px;
+      margin: 5px;
+      width: 80px;
+    }
+  </style>
+</head>
+<body>
+
+<h2>🌙 Moon Tracker</h2>
+
+<div class="display" id="display">AZ: 0° | ALT: 0°</div>
+
+<div class="step">
+  Step:
+  <button onclick="setStep(1)">1°</button>
+  <button onclick="setStep(1.5)">1.5°</button>
+  <button onclick="setStep(5)">5°</button>
+  <button onclick="setStep(10)">10°</button>
+</div>
+
+<div class="controls">
+  <div>
+    <button onclick="altUp()">↑</button>
+  </div>
+  <div>
+    <button onclick="azLeft()">←</button>
+    <button onclick="azRight()">→</button>
+  </div>
+  <div>
+    <button onclick="altDown()">↓</button>
+  </div>
+</div>
+
+<h3>Direct Input</h3>
+AZ: <input id="azInput" value="0">
+ALT: <input id="altInput" value="0">
+<button onclick="goTo()">GO</button>
+
+<p id="status">Idle</p>
+
+<script>
+let az = 0;
+let alt = 0;
+let step = 1.5;
+const ESP = "http://192.168.4.1";
+
+function updateDisplay() {
+  document.getElementById("display").innerText = `AZ: ${az.toFixed(1)}° | ALT: ${alt.toFixed(1)}°`;
+}
+
+function setStep(s) {
+  step = s;
+}
+
+function azRight() {
+  az += step;
+  send();
+}
+
+function azLeft() {
+  az -= step;
+  send();
+}
+
+function altUp() {
+  alt += step;
+  if (alt > 90) alt = 90;
+  send();
+}
+
+function altDown() {
+  alt -= step;
+  if (alt < 0) alt = 0;
+  send();
+}
+
+function goTo() {
+  az = parseFloat(document.getElementById("azInput").value);
+  alt = parseFloat(document.getElementById("altInput").value);
+  send();
+}
+
+function send() {
+  updateDisplay();
+  let url = `${ESP}/move?az=${az}&alt=${alt}`;
+
+  fetch(url)
+    .then(() => {
+      document.getElementById("status").innerText = "Sent";
+    })
+    .catch(() => {
+      document.getElementById("status").innerText = "Error";
+    });
+}
+
+updateDisplay();
+</script>
+
+</body>
+</html>
