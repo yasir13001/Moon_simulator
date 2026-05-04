@@ -33,12 +33,13 @@ const camera = new THREE.PerspectiveCamera(
   65,
   window.innerWidth / window.innerHeight,
   0.1,
-  1000,
+  2000,
 );
 camera.position.set(0, 5, 20);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 document.body.appendChild(renderer.domElement);
 
 const raycaster = new THREE.Raycaster();
@@ -58,11 +59,14 @@ const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.enablePan = false;
 controls.minDistance = 2;
-controls.maxDistance = 120;
+controls.maxDistance = 200;
 
-const ambient = new THREE.AmbientLight(0xffffff, 0.25);
+const ambient = new THREE.AmbientLight(0x111122, 0.4);
 scene.add(ambient);
-const sunLight = new THREE.DirectionalLight(0xfff2c1, 1.2);
+const hemiLight = new THREE.HemisphereLight(0x0033aa, 0x002200, 0.3);
+scene.add(hemiLight);
+const sunLight = new THREE.DirectionalLight(0xfff2c1, 2.0);
+sunLight.castShadow = false;
 scene.add(sunLight);
 
 const skyGeo = new THREE.SphereGeometry(SKY_RADIUS, 32, 32);
@@ -72,73 +76,80 @@ const skyMat = new THREE.MeshBasicMaterial({
 });
 scene.add(new THREE.Mesh(skyGeo, skyMat));
 
-// Horizon and ocean references so the observer has orientation cues.
-const ocean = new THREE.Mesh(
-  new THREE.CircleGeometry(70, 96),
-  new THREE.MeshPhongMaterial({
-    color: 0x0d2f59,
-    shininess: 40,
-    specular: 0x315c88,
-    transparent: true,
-    opacity: 0.9,
-  }),
-);
-ocean.rotation.x = -Math.PI / 2;
-ocean.position.y = -8;
-scene.add(ocean);
-
-const horizonRing = new THREE.Mesh(
-  new THREE.RingGeometry(69.4, 70.1, 128),
-  new THREE.MeshBasicMaterial({
-    color: 0x4f80c4,
-    transparent: true,
-    opacity: 0.65,
-    side: THREE.DoubleSide,
-  }),
-);
-horizonRing.rotation.x = -Math.PI / 2;
-horizonRing.position.y = -7.98;
-scene.add(horizonRing);
-
-const grid = new THREE.GridHelper(120, 24, 0x2d5f97, 0x1a3357);
-grid.position.y = -7.95;
-grid.material.transparent = true;
-grid.material.opacity = 0.25;
-scene.add(grid);
-
 addCardinalMarker("N", 0);
 addCardinalMarker("E", 90);
 addCardinalMarker("S", 180);
 addCardinalMarker("W", 270);
 
+// Load real Earth texture from CDN
+const textureLoader = new THREE.TextureLoader();
+const earthTexture = textureLoader.load(
+  "https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/textures/planets/earth_atmos_2048.jpg"
+);
+const earthSpecTexture = textureLoader.load(
+  "https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/textures/planets/earth_specular_2048.jpg"
+);
+const earthNormalTexture = textureLoader.load(
+  "https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/textures/planets/earth_normal_2048.jpg"
+);
+const earthCloudsTexture = textureLoader.load(
+  "https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/textures/planets/earth_clouds_1024.png"
+);
+const moonTexture = textureLoader.load(
+  "https://cdn.jsdelivr.net/gh/mrdoob/three.js@r128/examples/textures/planets/moon_1024.jpg"
+);
+
+// Earth radius large enough that only the curved top is visible —
+// observer feels like they're standing on the surface, not floating above a ball.
+const EARTH_RADIUS = 400;
+
 const earthRef = new THREE.Mesh(
-  new THREE.SphereGeometry(5, 32, 32),
+  new THREE.SphereGeometry(EARTH_RADIUS, 128, 128),
   new THREE.MeshPhongMaterial({
-    color: 0x1d4f82,
-    emissive: 0x071222,
-    shininess: 12,
+    map: earthTexture,
+    specularMap: earthSpecTexture,
+    normalMap: earthNormalTexture,
+    specular: new THREE.Color(0x4488aa),
+    shininess: 25,
   }),
 );
-earthRef.position.set(0, -18, -20);
+earthRef.position.set(0, -EARTH_RADIUS - 7, 0);
 scene.add(earthRef);
+earthRef.userData.name = "Earth";
 
+// Cloud layer
 const earthCloudBand = new THREE.Mesh(
-  new THREE.SphereGeometry(5.08, 24, 24),
-  new THREE.MeshBasicMaterial({
-    color: 0xb3d2ff,
+  new THREE.SphereGeometry(EARTH_RADIUS * 1.004, 128, 128),
+  new THREE.MeshPhongMaterial({
+    map: earthCloudsTexture,
     transparent: true,
-    opacity: 0.12,
+    opacity: 0.7,
+    depthWrite: false,
   }),
 );
 earthCloudBand.position.copy(earthRef.position);
 scene.add(earthCloudBand);
 
+// Atmosphere glow
+const earthAtmo = new THREE.Mesh(
+  new THREE.SphereGeometry(EARTH_RADIUS * 1.02, 128, 128),
+  new THREE.MeshPhongMaterial({
+    color: 0x2255aa,
+    transparent: true,
+    opacity: 0.10,
+    side: THREE.BackSide,
+    depthWrite: false,
+  }),
+);
+earthAtmo.position.copy(earthRef.position);
+scene.add(earthAtmo);
+
 const stars = new THREE.Group();
-for (let i = 0; i < 500; i += 1) {
+for (let i = 0; i < 500; i++) {
   const p = randomPointOnSphere(SKY_RADIUS - 2);
   const star = new THREE.Mesh(
     new THREE.SphereGeometry(0.08 + Math.random() * 0.1, 8, 8),
-    new THREE.MeshBasicMaterial({ color: 0xffffff }),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 1.0 }),
   );
   star.position.copy(p);
   star.userData.name = `Star ${i + 1}`;
@@ -148,26 +159,57 @@ for (let i = 0; i < 500; i += 1) {
 scene.add(stars);
 
 const moonMesh = new THREE.Mesh(
-  new THREE.SphereGeometry(1.2, 32, 32),
-  new THREE.MeshStandardMaterial({
-    color: 0xbcbcbc,
-    roughness: 0.95,
-    metalness: 0.0,
+  new THREE.SphereGeometry(1.2, 64, 64),
+  new THREE.MeshBasicMaterial({
+    map: moonTexture,
   }),
 );
 scene.add(moonMesh);
 moonMesh.userData.name = "Moon";
 pickableObjects.push(moonMesh);
 
+// Sun core
 const sunMesh = new THREE.Mesh(
-  new THREE.SphereGeometry(1.7, 24, 24),
-  new THREE.MeshBasicMaterial({ color: 0xffd463 }),
+  new THREE.SphereGeometry(1.7, 32, 32),
+  new THREE.MeshBasicMaterial({ color: 0xffe87a }),
 );
 scene.add(sunMesh);
 sunMesh.userData.name = "Sun";
 pickableObjects.push(sunMesh);
 pickableObjects.push(earthRef);
-earthRef.userData.name = "Earth";
+
+// Sun glow — two additive sprite layers for corona effect
+function makeSunGlowTexture(innerAlpha, outerSize) {
+  const c = document.createElement("canvas");
+  c.width = 128; c.height = 128;
+  const ctx = c.getContext("2d");
+  const g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  g.addColorStop(0,   `rgba(255,245,180,${innerAlpha})`);
+  g.addColorStop(0.2, `rgba(255,200,80,${innerAlpha * 0.6})`);
+  g.addColorStop(0.6, `rgba(255,140,20,0.15)`);
+  g.addColorStop(1,   "rgba(255,100,0,0)");
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 128, 128);
+  return new THREE.CanvasTexture(c);
+}
+
+const sunGlow1 = new THREE.Sprite(new THREE.SpriteMaterial({
+  map: makeSunGlowTexture(0.9, 64),
+  blending: THREE.AdditiveBlending,
+  transparent: true,
+  depthWrite: false,
+}));
+sunGlow1.scale.set(8, 8, 1);
+scene.add(sunGlow1);
+
+const sunGlow2 = new THREE.Sprite(new THREE.SpriteMaterial({
+  map: makeSunGlowTexture(0.35, 128),
+  blending: THREE.AdditiveBlending,
+  transparent: true,
+  depthWrite: false,
+}));
+sunGlow2.scale.set(20, 20, 1);
+scene.add(sunGlow2);
 
 let location = {
   lat: Number.parseFloat(latEl.value),
@@ -341,8 +383,6 @@ function animate(now = performance.now()) {
     }
   }
 
-  earthRef.rotation.y += deltaSeconds * 0.08;
-  earthCloudBand.rotation.y += deltaSeconds * 0.1;
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
 }
@@ -606,35 +646,56 @@ function applyInterpolatedSky() {
   moonMesh.position.copy(moonSnap0Vec).lerp(moonSnap1Vec, t);
   sunMesh.position.copy(sunSnap0Vec).lerp(sunSnap1Vec, t);
 
-  const light = moonSnap0Light + (moonSnap1Light - moonSnap0Light) * t;
-  moonMesh.material.color.setRGB(0.2 + light, 0.2 + light, 0.22 + light);
-  sunLight.position.copy(sunMesh.position).normalize();
-  sunLight.intensity = Math.max(0.2, Math.min(1.5, light + 0.3));
+  // Keep sun glow sprites locked to sun position
+  sunGlow1.position.copy(sunMesh.position);
+  sunGlow2.position.copy(sunMesh.position);
 
-  // Fade stars based on sun altitude.
-  // Fully visible below -6° (astronomical twilight), fully hidden above +6°.
+  // Sun light direction
+  sunLight.position.copy(sunMesh.position).normalize();
+
+  // Moon: point it toward the sun so the texture lit side matches reality
+  moonMesh.lookAt(sunMesh.position);
+
+  // Sun intensity by altitude
   const sunAltDeg = sunSnap0AltDeg + (sunSnap1AltDeg - sunSnap0AltDeg) * t;
-  const starOpacity = Math.max(0, Math.min(1, (-sunAltDeg - 6) / 12 + 1));
+  const sunAboveHorizon = Math.max(0, sunAltDeg);
+  sunLight.intensity = 0.15 + Math.min(2.2, sunAboveHorizon / 10);
+
+  // Sun glow visibility — hide below horizon
+  const sunVisible = sunAltDeg > -3;
+  sunGlow1.visible = sunVisible;
+  sunGlow2.visible = sunVisible;
+  if (sunVisible) {
+    const glowFade = Math.min(1, (sunAltDeg + 3) / 8);
+    sunGlow1.material.opacity = glowFade;
+    sunGlow2.material.opacity = glowFade * 0.5;
+  }
+
+  // Stars: fade out when sun is above horizon
+  const starOpacity = sunAltDeg < -6
+    ? 1.0
+    : sunAltDeg > 6
+      ? 0.0
+      : Math.max(0, 1.0 - (sunAltDeg + 6) / 12);
   stars.children.forEach((star) => {
     star.material.opacity = starOpacity;
-    star.material.transparent = true;
-    star.visible = starOpacity > 0.01;
   });
+  stars.visible = starOpacity > 0.01;
+
+  // Ambient dims at night, brightens at day
+  ambient.intensity = 0.08 + Math.min(0.5, sunAboveHorizon / 30);
+  hemiLight.intensity = 0.05 + Math.min(0.4, sunAboveHorizon / 40);
 
   // Sky colour gradient keyed to sun altitude:
-  //  below -18° : deep night   #000006
-  //  -18° → -6° : twilight     #000006 → #1a0a2e (deep purple)
-  //   -6° →  0° : civil dawn   #1a0a2e → #c0471a (orange-red horizon)
-  //    0° →  8° : sunrise      #c0471a → #e8a030 (warm amber)
-  //    8° → 20° : morning      #e8a030 → #4a90d9 (sky blue)
-  //   above 20° : full day     #4a90d9 → #1a6ecf (deep blue)
   const skyStops = [
     { alt: -18, color: new THREE.Color(0x000006) },
-    { alt:  -6, color: new THREE.Color(0x1a0a2e) },
-    { alt:   0, color: new THREE.Color(0xc0471a) },
-    { alt:   8, color: new THREE.Color(0xe8a030) },
-    { alt:  20, color: new THREE.Color(0x4a90d9) },
-    { alt:  90, color: new THREE.Color(0x1a6ecf) },
+    { alt:  -6, color: new THREE.Color(0x0a0520) },
+    { alt:   0, color: new THREE.Color(0x8c2e0a) },
+    { alt:   4, color: new THREE.Color(0xd4601a) },
+    { alt:   8, color: new THREE.Color(0xe89040) },
+    { alt:  15, color: new THREE.Color(0x60a8e8) },
+    { alt:  30, color: new THREE.Color(0x2872cc) },
+    { alt:  90, color: new THREE.Color(0x1255a8) },
   ];
   let skyColor = skyStops[0].color.clone();
   for (let i = 0; i < skyStops.length - 1; i++) {
@@ -649,6 +710,14 @@ function applyInterpolatedSky() {
   }
   scene.background = skyColor;
   skyMat.color.copy(skyColor);
+
+  // Tint sun mesh colour warmer near horizon
+  if (sunAltDeg < 10) {
+    const horizonTint = Math.max(0, 1 - sunAltDeg / 10);
+    sunMesh.material.color.setRGB(1, 0.85 - horizonTint * 0.25, 0.3 - horizonTint * 0.25);
+  } else {
+    sunMesh.material.color.setRGB(1, 0.91, 0.48);
+  }
 }
 
 function horizontalToCartesian(altDeg, azDeg, radius) {
@@ -799,6 +868,9 @@ function onCanvasHover(event) {
 
   const hits = raycaster.intersectObjects(pickableObjects, false);
   const hit = hits.length > 0 ? hits[0].object : null;
+
+  // Don't apply hover effect to the Earth globe
+  if (hit === earthRef) return;
 
   if (hoveredObject === hit) return;
   clearHoverState();
