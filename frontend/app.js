@@ -671,7 +671,7 @@ function applyInterpolatedSky() {
     sunGlow2.material.opacity = glowFade * 0.5;
   }
 
-  // Stars: fade out when sun is above horizon
+  // Stars: fully visible below -6°, fade between -6° and +6°, hidden above +6°
   const starOpacity = sunAltDeg < -6
     ? 1.0
     : sunAltDeg > 6
